@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Astra Sandbox | Robotic Simulation</title>
+    <link rel="stylesheet" href="style.css?v=8">
+    <!-- Import Map for CDNs -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+            "@dimforge/rapier3d": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.11.2/rapier.es.js",
+            "tweakpane": "https://cdn.jsdelivr.net/npm/tweakpane@4.0.1/dist/tweakpane.min.js",
+            "physics": "./physics.js?v=11",
+            "environment": "./environment.js?v=11",
+            "humanoid": "./humanoid.js?v=11",
+            "interaction": "./interaction.js?v=11",
+            "terrain": "./terrain.js?v=11",
+            "ai_brain": "./ai_brain.js?v=11"
+        }
+    }
+    </script>
+</head>
+<body>
+    <!-- Professional Splash Screen -->
+    <div id="loader-wrapper">
+        <div id="loader-content">
+            <h1 class="loader-title">ASTRA<span>SANDBOX</span></h1>
+            <p class="loader-tagline">'A robot training environment'</p>
+            <div class="loader-progress-container">
+                <div id="loader-progress-bar"></div>
+            </div>
+            <p id="loader-percent">0%</p>
+        </div>
+    </div>
+
+    <canvas id="canvas-webgl"></canvas>
+    <div id="ui-overlay">
+        <!-- Error Overlay -->
+        <div id="error-log" style="position: absolute; bottom: 10px; left: 10px; color: red; background: rgba(0,0,0,0.8); font-family: monospace; z-index: 1000; padding: 10px; max-width: 80%; display: none;"></div>
+        <script>
+            window.addEventListener('error', function(event) {
+                const el = document.getElementById('error-log');
+                el.style.display = 'block';
+                el.innerHTML += event.message + '<br>' + event.filename + ':' + event.lineno + '<br><br>';
+            });
+            window.addEventListener('unhandledrejection', function(event) {
+                const el = document.getElementById('error-log');
+                el.style.display = 'block';
+                el.innerHTML += 'Unhandled Promise Rejection: ' + event.reason + '<br><br>';
+            });
+        </script>
+
+        <header>
+            <div class="logo">ASTRA<span>SANDBOX</span></div>
+            <div class="status">
+                <span class="dot"></span>
+                <span id="physics-status">Physics: Connecting...</span>
+            </div>
+        </header>
+        
+        <!-- Interactive Tooltips -->
+        <div id="tooltip" class="glass-tooltip">
+            Interact Mode Active
+        </div>
+
+        <!-- IMU Telemetry HUD -->
+        <div id="imu-panel" class="hud-panel top-left">
+            <div class="hud-title">IMU TELEMETRY</div>
+            <div class="hud-data">
+                <div>PITCH: <span id="imu-pitch">0.00</span>°</div>
+                <div>ROLL:  <span id="imu-roll">0.00</span>°</div>
+                <div>YAW:   <span id="imu-yaw">0.00</span>°</div>
+            </div>
+            <div style="margin-top:8px; border-top:1px solid rgba(0,242,255,0.2); padding-top:6px;">
+                <span id="selected-robot-label" style="font-size:0.8rem; color:#aaa;">Simulation Active</span>
+            </div>
+        </div>
+
+        <!-- Blueprint Component Inspector / Garage Modifier -->
+        <div id="specs-panel" class="hud-panel left-side hidden" style="pointer-events: auto;">
+            <h2 id="specs-title">Component Name</h2>
+            <div class="specs-cost" id="specs-cost">Cost: $0</div>
+            <div class="specs-desc" id="specs-desc" style="margin-bottom: 12px;">Specs...</div>
+            <div id="specs-modifier" style="border-top: 1px solid rgba(0, 242, 255, 0.3); padding-top: 10px;">
+                <label style="font-size: 0.75rem; color: #00f2ff; display: block; margin-bottom: 5px; letter-spacing: 1px;">PAINT & FINISH</label>
+                <input type="color" id="specs-color" class="color-picker" style="height:35px; width:100%; cursor:pointer; background:none; border:none; border-radius:4px; padding:0;"/>
+            </div>
+        </div>
+
+        <!-- AI Command Brain Panel -->
+        <div id="ai-brain-panel" class="hud-panel ai-panel">
+            <div class="hud-title" style="color:#cc44ff;">🧠 ROBOT BRAIN</div>
+            <div id="ai-log" style="height:110px;overflow-y:auto;font-size:0.72rem;line-height:1.5;color:#ccc;margin-bottom:6px;"></div>
+            <div style="display:flex;gap:6px;align-items:center;">
+                <input id="ai-input" type="text" placeholder='e.g. "walk forward fast"'
+                    style="flex:1;background:rgba(255,255,255,0.07);border:1px solid rgba(204,68,255,0.4);
+                    border-radius:6px;padding:5px 8px;color:#fff;font-size:0.75rem;outline:none;" />
+                <button id="ai-send" style="background:rgba(204,68,255,0.25);border:1px solid #cc44ff;
+                    border-radius:6px;padding:5px 10px;color:#cc44ff;cursor:pointer;font-size:0.75rem;
+                    transition:background 0.2s;">→</button>
+            </div>
+        </div>
+
+        <!-- Sleek Bottom Action HUD -->
+        <div class="action-hud">
+            <button class="action-btn" id="btn-spawn-humanoid">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                <span>Spawn Robot</span>
+            </button>
+            <button class="action-btn" id="btn-toggle-theme">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                <span>Switch Theme</span>
+            </button>
+            <div class="divider"></div>
+            <div class="hud-info">
+                <strong>DRAG:</strong> Transform Axes<br>
+                <strong>ORBIT:</strong> Left Click<br>
+                <strong>PAN:</strong> Right Click
+            </div>
+        </div>
+
+        <aside id="gui-container"></aside>
+    </div>
+
+    <!-- Main Module -->
+    <script type="module" src="main.js?v=19"></script>
+</body>
+</html>
