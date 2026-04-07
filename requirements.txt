@@ -1,0 +1,10 @@
+# Try installing these first (Pre-compiled wheels are more likely)
+gymnasium[classic_control]
+numpy
+fastapi
+uvicorn
+python-multipart
+onnx
+onnxruntime
+# If pybullet fails, you may need a Python 3.10/3.11 environment or C++ Build Tools
+# pybullet
