@@ -188,16 +188,18 @@ class App {
         spawnFolder.addButton({
             title: 'Reset All Robots',
         }).on('click', () => {
-            for (const r of this.robots) {
-                this.scene.remove(r.group);
-                if (r.physicsBodyHandle !== null) {
-                    const body = physics.world.getRigidBody(r.physicsBodyHandle);
-                    if (body) physics.world.removeRigidBody(body);
+            physics.safe(() => {
+                for (const r of this.robots) {
+                    this.scene.remove(r.group);
+                    if (r.physicsBodyHandle !== null) {
+                        const body = physics.world.getRigidBody(r.physicsBodyHandle);
+                        if (body) physics.world.removeRigidBody(body);
+                    }
                 }
-            }
-            this.robots = [];
-            this.selectedRobot = null;
-            document.getElementById('selected-robot-label').innerText = 'Simulation Active';
+                this.robots = [];
+                this.selectedRobot = null;
+                document.getElementById('selected-robot-label').innerText = 'Simulation Reset';
+            });
         });
     }
 

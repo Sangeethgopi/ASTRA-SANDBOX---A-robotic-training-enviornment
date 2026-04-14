@@ -44,14 +44,14 @@ export class InteractionManager {
                 const handle = attached._humanoid ? attached._humanoid.physicsBodyHandle : this.physicsMap.get(attached.uuid);
                 
                 if (handle !== null && handle !== undefined) {
-                    (() => {
+                    physics.safe(() => {
                         const body = physics.world.getRigidBody(handle);
                         if (body && body.isDynamic()) {
                             body.wakeUp();
                             body.setLinvel({ x: 0, y: 0, z: 0 }, true);
                             body.setAngvel({ x: 0, y: 0, z: 0 }, true);
                         }
-                    })();
+                    });
                 }
             }
         });
@@ -64,7 +64,7 @@ export class InteractionManager {
             const handle = attached._humanoid ? attached._humanoid.physicsBodyHandle : this.physicsMap.get(attached.uuid);
             if (handle === null || handle === undefined) return;
 
-            (() => {
+            physics.safe(() => {
                 const body = physics.world.getRigidBody(handle);
                 if (body && body.isDynamic()) {
                     const pos = attached.position;
@@ -83,7 +83,7 @@ export class InteractionManager {
                         body.setRotation({ x: rot.x, y: rot.y, z: rot.z, w: rot.w }, true);
                     }
                 }
-            })();
+            });
         });
 
         this.scene.add(this.transformControl);
