@@ -22,7 +22,8 @@ export class InteractionManager {
         this.raycaster = new THREE.Raycaster();
         this.mouse = new THREE.Vector2();
         
-        // Track physics mapping: mesh.uuid -> rapierBody
+        // Track physics mapping: mesh.uuid -> Rapier Handle (integer)
+        // Storing handles instead of objects prevents recursive borrow panics
         this.physicsMap = new Map();
         
         this.setupTransformControls();
@@ -35,29 +36,22 @@ export class InteractionManager {
         // Disable orbit while dragging
         this.transformControl.addEventListener('dragging-changed', (event) => {
             this.orbitControls.enabled = !event.value;
-            const tooltip = document.getElementById('tooltip');
-            if (tooltip) {
-                if (event.value) tooltip.classList.add('active');
-                else tooltip.classList.remove('active');
-            }
-
             if (!event.value) {
-                // Drag ended: wake/reset the physics body
+                // Drag ended: wake/reset the physics body via handle
                 const attached = this.transformControl.object;
-                if (attached && attached._humanoid) {
-                    const h = attached._humanoid;
-                    if (h.physicsBody) {
-                        h.physicsBody.wakeUp();
-                        h.physicsBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
-                        h.physicsBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
-                    }
-                } else if (attached) {
-                    const body = this.physicsMap.get(attached.uuid);
-                    if (body && body.isDynamic()) {
-                        body.wakeUp();
-                        body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-                        body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-                    }
+                if (!attached) return;
+
+                const handle = attached._humanoid ? attached._humanoid.physicsBodyHandle : this.physicsMap.get(attached.uuid);
+                
+                if (handle !== null && handle !== undefined) {
+                    (() => {
+                        const body = physics.world.getRigidBody(handle);
+                        if (body && body.isDynamic()) {
+                            body.wakeUp();
+                            body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+                            body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+                        }
+                    })();
                 }
             }
         });
@@ -67,28 +61,29 @@ export class InteractionManager {
             const attached = this.transformControl.object;
             if (!attached) return;
 
-            if (attached._humanoid) {
-                // Hybrid robot: move the capsule to match where the group was dragged
-                const h = attached._humanoid;
-                if (h.physicsBody) {
-                    const gp = attached.position;
-                    // Capsule centre = group.y + footOffset
-                    h.physicsBody.setTranslation({
-                        x: gp.x,
-                        y: gp.y + h.footOffset,
-                        z: gp.z
-                    }, true);
-                }
-            } else {
-                // Legacy physics object
-                const body = this.physicsMap.get(attached.uuid);
+            const handle = attached._humanoid ? attached._humanoid.physicsBodyHandle : this.physicsMap.get(attached.uuid);
+            if (handle === null || handle === undefined) return;
+
+            (() => {
+                const body = physics.world.getRigidBody(handle);
                 if (body && body.isDynamic()) {
                     const pos = attached.position;
                     const rot = attached.quaternion;
-                    body.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, true);
-                    body.setRotation({ x: rot.x, y: rot.y, z: rot.z, w: rot.w }, true);
+                    
+                    if (attached._humanoid) {
+                        // Robot capsule: move it to match group drag
+                        body.setTranslation({
+                            x: pos.x,
+                            y: pos.y + attached._humanoid.footOffset,
+                            z: pos.z
+                        }, true);
+                    } else {
+                        // Simple physics object
+                        body.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, true);
+                        body.setRotation({ x: rot.x, y: rot.y, z: rot.z, w: rot.w }, true);
+                    }
                 }
-            }
+            })();
         });
 
         this.scene.add(this.transformControl);
@@ -202,20 +197,21 @@ export class InteractionManager {
     registerHumanoid(humanoid) {
         if (!humanoid || !humanoid.parts) return;
         if (!this.meshToHumanoidMap) this.meshToHumanoidMap = new Map();
-        const capsule = humanoid.physicsBody || null;
+        
+        // Store handle, not the live body object
+        const handle = humanoid.physicsBodyHandle;
         for (const part of Object.values(humanoid.parts)) {
             if (part.mesh) {
-                // Map mesh UUID → capsule body (for gizmo / wake on drag)
-                this.physicsMap.set(part.mesh.uuid, capsule);
+                this.physicsMap.set(part.mesh.uuid, handle);
                 this.meshToHumanoidMap.set(part.mesh.uuid, humanoid);
             }
         }
     }
 
-    // Register a Mesh and its Rapier RigidBody so they can be interacted with
-    registerObject(mesh, body) {
-        if (!mesh || !body) return;
-        this.physicsMap.set(mesh.uuid, body);
+    // Register a Mesh and its Rapier Handle
+    registerObject(mesh, handle) {
+        if (!mesh || handle === undefined) return;
+        this.physicsMap.set(mesh.uuid, handle);
     }
 
     // Unregister object (useful for object deletion later)

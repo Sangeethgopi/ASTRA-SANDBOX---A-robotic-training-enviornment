@@ -190,7 +190,10 @@ class App {
         }).on('click', () => {
             for (const r of this.robots) {
                 this.scene.remove(r.group);
-                if (r.physicsBody) physics.world.removeRigidBody(r.physicsBody);
+                if (r.physicsBodyHandle !== null) {
+                    const body = physics.world.getRigidBody(r.physicsBodyHandle);
+                    if (body) physics.world.removeRigidBody(body);
+                }
             }
             this.robots = [];
             this.selectedRobot = null;
@@ -242,8 +245,8 @@ class App {
             robot.update(delta);
         }
 
-        // Update HUD IMU
-        if (this.selectedRobot && this.selectedRobot.physicsBody) {
+        // Update HUD IMU — use the synced group rotation (avoid expensive WASM calls here)
+        if (this.selectedRobot) {
              const rot = this.selectedRobot.group.rotation;
              document.getElementById('imu-pitch').innerText = (rot.x * 180 / Math.PI).toFixed(2);
              document.getElementById('imu-roll').innerText = (rot.z * 180 / Math.PI).toFixed(2);
