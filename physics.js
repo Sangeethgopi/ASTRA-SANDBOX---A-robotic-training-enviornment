@@ -130,7 +130,7 @@ export function createMotorizedJoint(world, bodyA, bodyB, anchorA, anchorB, axis
         params.limits = limits;
     }
     
-    const joint = world.createJoint(params, bodyA, bodyB);
+    const joint = world.createImpulseJoint(params, bodyA, bodyB, true);
     
     // Joint motors are configured on actual joint instance (revolute specific)
     joint.configureMotorPosition(0.0, 100.0, 10.0); // (targetPos, stiffness, damping)
