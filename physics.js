@@ -131,11 +131,12 @@ export function createMotorizedJoint(world, bodyA, bodyB, anchorA, anchorB, axis
     }
     
     const joint = world.createImpulseJoint(params, bodyA, bodyB, true);
-    
-    // Joint motors are configured on actual joint instance (revolute specific)
-    joint.configureMotorPosition(0.0, 100.0, 10.0); // (targetPos, stiffness, damping)
-    
-    return joint;
+    const handle = joint.handle; // Save the stable handle (a plain number)
+
+    // Safe to configure motor at creation time — joint was just created
+    joint.configureMotorPosition(0.0, 100.0, 10.0);
+
+    return handle; // ← return handle, NOT the live object (live refs go stale after world.step)
 }
 
 export const physics = new PhysicsWorld();

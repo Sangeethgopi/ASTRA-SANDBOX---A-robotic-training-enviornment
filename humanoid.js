@@ -810,16 +810,21 @@ export class Humanoid {
     }
 
     _applyJointMotors(hL, kL, aL, hR, kR, aR, arL, arR, ebL, ebR) {
+        const world = physics.world;
+        if (!world) return;
         const j = this.joints;
-        if (j.hipLeft)   j.hipLeft.configureMotorPosition(hL, 120.0, 12.0);
-        if (j.hipRight)  j.hipRight.configureMotorPosition(hR, 120.0, 12.0);
-        if (j.kneeLeft)  j.kneeLeft.configureMotorPosition(-kL, 100.0, 10.0);
-        if (j.kneeRight) j.kneeRight.configureMotorPosition(-kR, 100.0, 10.0);
-        if (j.ankleLeft)  j.ankleLeft.configureMotorPosition(aL, 80.0, 8.0);
-        if (j.ankleRight) j.ankleRight.configureMotorPosition(aR, 80.0, 8.0);
-        if (j.shoulderLeft)  j.shoulderLeft.configureMotorPosition(arL, 60.0, 6.0);
-        if (j.shoulderRight) j.shoulderRight.configureMotorPosition(arR, 60.0, 6.0);
-        if (j.elbowLeft)     j.elbowLeft.configureMotorPosition(ebL, 40.0, 4.0);
-        if (j.elbowRight)    j.elbowRight.configureMotorPosition(ebR, 40.0, 4.0);
+        // Always retrieve a fresh reference via handle — live Rapier objects go stale after world.step()
+        const get = (h) => (h !== undefined && h !== null) ? world.getImpulseJoint(h) : null;
+
+        const jHL = get(j.hipLeft);      if (jHL) jHL.configureMotorPosition(hL,  120.0, 12.0);
+        const jHR = get(j.hipRight);     if (jHR) jHR.configureMotorPosition(hR,  120.0, 12.0);
+        const jKL = get(j.kneeLeft);     if (jKL) jKL.configureMotorPosition(-kL, 100.0, 10.0);
+        const jKR = get(j.kneeRight);    if (jKR) jKR.configureMotorPosition(-kR, 100.0, 10.0);
+        const jAL = get(j.ankleLeft);    if (jAL) jAL.configureMotorPosition(aL,   80.0,  8.0);
+        const jAR = get(j.ankleRight);   if (jAR) jAR.configureMotorPosition(aR,   80.0,  8.0);
+        const jSL = get(j.shoulderLeft); if (jSL) jSL.configureMotorPosition(arL,  60.0,  6.0);
+        const jSR = get(j.shoulderRight);if (jSR) jSR.configureMotorPosition(arR,  60.0,  6.0);
+        const jEL = get(j.elbowLeft);    if (jEL) jEL.configureMotorPosition(ebL,  40.0,  4.0);
+        const jER = get(j.elbowRight);   if (jER) jER.configureMotorPosition(ebR,  40.0,  4.0);
     }
 }
