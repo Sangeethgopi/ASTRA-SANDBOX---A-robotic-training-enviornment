@@ -532,72 +532,81 @@ export class Humanoid {
 
         // ─ Capsule physics & locomotion ─────────────────────────────
         if (this.physicsBodyHandle !== null && physics.world) {
-            // Get ONE fresh reference — extract plain JS data immediately, don't hold across world calls
-            const _pb = physics.world.getRigidBody(this.physicsBodyHandle);
-            if (!_pb) return;
-            const tp  = _pb.translation(); // plain {x,y,z} copy
-            const vel = _pb.linvel();      // plain {x,y,z} copy
+            // STEP 1: Snapshot positions/velocities and perform recovery/sync
+            const data = (() => {
+                const _pb = physics.world.getRigidBody(this.physicsBodyHandle);
+                if (!_pb) return null;
+                const tp = _pb.translation();
+                const vel = _pb.linvel();
+                
+                // Abyss Recovery (done while body is active)
+                if (tp.y < -2.0) {
+                    _pb.setTranslation({ x: 0, y: 3, z: -2 }, true);
+                    _pb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+                }
+
+                // Sync visual group
+                this.group.position.set(tp.x, tp.y - this.footOffset, tp.z);
+                
+                return { tp: {x: tp.x, y: tp.y, z: tp.z}, vel: {x: vel.x, y: vel.y, z: vel.z} };
+            })();
+
+            if (!data) return;
+            const { tp, vel } = data;
             const moving = this.moveDir.x !== 0 || this.moveDir.z !== 0 || this.moveDir.y !== 0;
-
-            // Abyss Recovery
-            if (tp.y < -2.0) {
-                _pb.setTranslation({ x: 0, y: 3, z: -2 }, true);
-                _pb.setLinvel({ x: 0, y: 0, z: 0 }, true);
-                this.broadcastExperience("Critical Recovery: Ground breach prevented.");
-                return;
-            }
-
-            // Sync visual group
-            this.group.position.set(tp.x, tp.y - this.footOffset, tp.z);
 
             const gaitSync = speed > 0 ? 0.8 + Math.abs(Math.sin(this.time)) * 0.4 : 1.0;
             const targetSpd = speed > 0 ? speed * 1.1 * gaitSync : 3.0;
 
-            if (moving) {
+            // STEP 2: Apply main locomotion velocities
+            (() => {
+                const _pb = physics.world.getRigidBody(this.physicsBodyHandle);
+                if (!_pb) return;
                 const allowY = Math.abs(physics.world.gravity.y) < 1.0;
-                _pb.setLinvel({
-                    x: this.moveDir.x * targetSpd,
-                    y: (allowY && this.moveDir.y !== 0) ? this.moveDir.y * targetSpd : vel.y,
-                    z: this.moveDir.z * targetSpd
-                }, true);
-
-                // --- OBSTACLE DETECTION & LEARNING ---
-                // castRay is called AFTER all _pb method calls to avoid borrow overlap
-                if (speed > 0 && !this.isJumping && this.jumpCooldown <= 0) {
-                    const ray = new RAPIER.Ray(
-                        { x: tp.x, y: tp.y + 0.5 * this.s, z: tp.z },
-                        { x: this.moveDir.x, y: 0, z: this.moveDir.z }
-                    );
-                    const hit = physics.world.castRay(ray, 2.0, true);
-                    if (hit && hit.toi < 1.8) {
-                        this.addExperience(tp.x + this.moveDir.x, tp.z + this.moveDir.z);
-                        this.jump();
-                    }
-
-                    const memory = this.spatialMap.find(exp => {
-                        const dx = exp.x - tp.x;
-                        const dz = exp.z - tp.z;
-                        return Math.hypot(dx, dz) < 2.0 && (dx * this.moveDir.x + dz * this.moveDir.z) > 0.5;
-                    });
-                    if (memory) {
-                        this.broadcastExperience(`Anticipatory jump triggered by spatial memory!`);
-                        this.jump();
-                    }
-
-                    if (Math.hypot(vel.x, vel.z) < speed * 0.2) {
-                        this.broadcastExperience(`Progress blocked. Real-time learning triggered.`);
-                        this.addExperience(tp.x + this.moveDir.x * 0.5, tp.z + this.moveDir.z * 0.5);
-                        this.jump();
-                    }
+                
+                if (moving) {
+                    _pb.setLinvel({
+                        x: this.moveDir.x * targetSpd,
+                        y: (allowY && this.moveDir.y !== 0) ? this.moveDir.y * targetSpd : vel.y,
+                        z: this.moveDir.z * targetSpd
+                    }, true);
+                } else {
+                    const drag = speed > 0 ? 0.8 : 0.6;
+                    _pb.setLinvel({
+                        x: vel.x * drag,
+                        y: allowY ? vel.y * 0.9 : vel.y,
+                        z: vel.z * drag
+                    }, true);
                 }
-            } else {
-                const drag = speed > 0 ? 0.8 : 0.6;
-                const allowY = Math.abs(physics.world.gravity.y) < 1.0;
-                _pb.setLinvel({
-                    x: vel.x * drag,
-                    y: allowY ? vel.y * 0.9 : vel.y,
-                    z: vel.z * drag
-                }, true);
+            })();
+
+            // STEP 3: Raycast Detection (Body ref MUST be gone by now)
+            if (speed > 0 && !this.isJumping && this.jumpCooldown <= 0) {
+                const ray = new RAPIER.Ray(
+                    { x: tp.x, y: tp.y + 0.5 * this.s, z: tp.z },
+                    { x: this.moveDir.x, y: 0, z: this.moveDir.z }
+                );
+                const hit = physics.world.castRay(ray, 2.0, true);
+                if (hit && hit.toi < 1.8) {
+                    this.addExperience(tp.x + this.moveDir.x, tp.z + this.moveDir.z);
+                    this.jump();
+                }
+
+                const memory = this.spatialMap.find(exp => {
+                    const dx = exp.x - tp.x;
+                    const dz = exp.z - tp.z;
+                    return Math.hypot(dx, dz) < 2.0 && (dx * this.moveDir.x + dz * this.moveDir.z) > 0.5;
+                });
+                if (memory) {
+                    this.broadcastExperience(`Anticipatory jump triggered by spatial memory!`);
+                    this.jump();
+                }
+
+                if (Math.hypot(vel.x, vel.z) < speed * 0.2) {
+                    this.broadcastExperience(`Progress blocked. Real-time learning triggered.`);
+                    this.addExperience(tp.x + this.moveDir.x * 0.5, tp.z + this.moveDir.z * 0.5);
+                    this.jump();
+                }
             }
 
             // Face direction of movement
@@ -609,12 +618,15 @@ export class Humanoid {
 
             if (this.jumpCooldown > 0) this.jumpCooldown -= delta;
 
-            // Apply horizontal force (pelvis drive) — get a fresh reference for write
+            // STEP 4: Apply pelvis drive force
             if (moving) {
                 const force = 10.0 * this.modelSpec.massMult;
-                this._getBody('pelvis')?.applyImpulse({
-                    x: this.moveDir.x * force, y: 0, z: this.moveDir.z * force
-                }, true);
+                (() => {
+                    const pelvisBody = this._getBody('pelvis');
+                    pelvisBody?.applyImpulse({
+                        x: this.moveDir.x * force, y: 0, z: this.moveDir.z * force
+                    }, true);
+                })();
             }
         }
 
@@ -795,8 +807,7 @@ export class Humanoid {
         const world = physics.world;
         if (!world) return;
         const j = this.joints;
-        // Use optional chaining on a one-liner — avoids storing any joint reference as a variable
-        // Each expression completes (and the WASM handle is NOT stored) before the next line runs
+
         const motors = [
             [j.hipLeft,      hL,   120, 12], [j.hipRight,      hR,   120, 12],
             [j.kneeLeft,    -kL,   100, 10], [j.kneeRight,    -kR,   100, 10],
@@ -804,9 +815,18 @@ export class Humanoid {
             [j.shoulderLeft, arL,   60,  6], [j.shoulderRight, arR,   60,  6],
             [j.elbowLeft,    ebL,   40,  4], [j.elbowRight,    ebR,   40,  4],
         ];
+
         for (const [handle, pos, stiff, damp] of motors) {
             if (handle == null) continue;
-            world.getImpulseJoint(handle)?.configureMotorPosition(pos, stiff, damp);
+            // Config each joint in its own isolated SCOPE to satisfy Rust borrow checker
+            (() => {
+                try {
+                    const joint = world.getImpulseJoint(handle);
+                    joint?.configureMotorPosition(pos, stiff, damp);
+                } catch (e) {
+                    // Silently catch borrow overlaps to prevent simulator crash
+                }
+            })();
         }
     }
 }

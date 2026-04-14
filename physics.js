@@ -30,15 +30,16 @@ export class PhysicsWorld {
             const gravityMag = Math.abs(this.gravity.y);
 
             for (const handle of this.dynamicBodies) {
-                // Get a fresh reference each iteration — never hold across iterations
-                const body = this.world.getRigidBody(handle);
-                if (body && body.isDynamic()) {
-                    const pos = body.translation();
-                    if (pos.y < waterLevel) {
-                        const buoyantForce = waterDensity * gravityMag * 1.5;
-                        body.applyImpulse({ x: 0, y: buoyantForce * 0.016, z: 0 }, true);
+                (() => {
+                    const body = this.world.getRigidBody(handle);
+                    if (body && body.isDynamic()) {
+                        const pos = body.translation();
+                        if (pos.y < waterLevel) {
+                            const buoyantForce = waterDensity * gravityMag * 1.5;
+                            body.applyImpulse({ x: 0, y: buoyantForce * 0.016, z: 0 }, true);
+                        }
                     }
-                }
+                })();
             }
         }
 
