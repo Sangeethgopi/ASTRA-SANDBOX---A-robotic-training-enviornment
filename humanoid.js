@@ -430,7 +430,7 @@ export class Humanoid {
 
             const tp = _pb.translation();
             const vel = _pb.linvel();
-            this.group.position.set(tp.x, tp.y - (0.8 * this.s), t_z = tp.z);
+            this.group.position.set(tp.x, tp.y - (0.8 * this.s), tp.z);
             this.group.position.z = tp.z;
 
             if (tp.y < -2.0) {
