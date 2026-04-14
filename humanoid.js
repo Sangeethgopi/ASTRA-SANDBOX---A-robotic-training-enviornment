@@ -22,6 +22,7 @@ export class Humanoid {
         this.moveDir = { x: 0, z: 0 };
         this.joints = {}; // Kept for joint motor references
         this.physicsBodies = {}; // Multi-body tracking
+        this.parts = {}; // Visual mesh references for each body segment
         this.spatialMap = []; // Stores {x, z} of learned obstacles
         this.isJumping = false;
         this.jumpCooldown = 0;
