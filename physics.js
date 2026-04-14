@@ -6,15 +6,14 @@ export class PhysicsWorld {
         this.eventQueue = null;
         this.gravity = { x: 0.0, y: -9.81, z: 0.0 };
         this.ready = false;
-        this.envType = 'Earth'; // Earth, Water
-        this.dynamicBodies = []; // Track dynamic bodies for buoyancy/damping
+        this.envType = 'Earth';
+        this.dynamicBodies = []; // Stores handles (integers), NOT live object refs
     }
 
     async init() {
-        // Rapier compat mode requires initialization
         await RAPIER.init();
         this.world = new RAPIER.World(this.gravity);
-        this.world.timestep = 1.0 / 60.0; // Fixed 60Hz for physics
+        this.world.timestep = 1.0 / 60.0;
         this.eventQueue = new RAPIER.EventQueue(true);
         this.ready = true;
         console.log("🚀 Physics Engine Ready");
@@ -23,23 +22,20 @@ export class PhysicsWorld {
 
     step() {
         if (!this.world) return;
-        
-        // Special Pre-Step Physics (Buoyancy)
+
+        // Buoyancy pre-step (Water mode only)
         if (this.envType === 'Water') {
-            const waterLevel = 5.0; // Simulate water surface at Y=5
-            const waterDensity = 1.0; 
+            const waterLevel = 5.0;
+            const waterDensity = 1.0;
             const gravityMag = Math.abs(this.gravity.y);
-            
-            for(let body of this.dynamicBodies) {
+
+            for (const handle of this.dynamicBodies) {
+                // Get a fresh reference each iteration — never hold across iterations
+                const body = this.world.getRigidBody(handle);
                 if (body && body.isDynamic()) {
                     const pos = body.translation();
                     if (pos.y < waterLevel) {
-                        // Simple Buoyancy: Upward force proportional to depth (approximate)
-                        // F_b = density * volume * g
-                        // Assuming volume 1 for simplicity of tracked dynamic bodies
-                        const buoyantForce = waterDensity * gravityMag * 1.5; 
-                        
-                        // Apply upward impulse every frame
+                        const buoyantForce = waterDensity * gravityMag * 1.5;
                         body.applyImpulse({ x: 0, y: buoyantForce * 0.016, z: 0 }, true);
                     }
                 }
@@ -50,68 +46,44 @@ export class PhysicsWorld {
     }
 
     createGround(width, depth) {
-        const bodyDesc = RAPIER.RigidBodyDesc.fixed()
-            .setTranslation(0, -0.1, 0);
+        const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.1, 0);
         const body = this.world.createRigidBody(bodyDesc);
-        
-        const colliderDesc = RAPIER.ColliderDesc.cuboid(width / 2, 0.1, depth / 2);
-        this.world.createCollider(colliderDesc, body);
-        
-        return body;
+        this.world.createCollider(RAPIER.ColliderDesc.cuboid(width / 2, 0.1, depth / 2), body);
+        return body.handle;
     }
 
     createBox(x, y, z, size = 1) {
-        const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-            .setTranslation(x, y, z);
-        
+        const bodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(x, y, z);
         if (this.envType === 'Water') {
             bodyDesc.setLinearDamping(5.0).setAngularDamping(5.0);
         }
-
         const body = this.world.createRigidBody(bodyDesc);
-        
-        const colliderDesc = RAPIER.ColliderDesc.cuboid(size/2, size/2, size/2)
-            .setMass(1.0)
-            .setRestitution(0.5);
-        this.world.createCollider(colliderDesc, body);
-        
-        // Enable CCD for fast-moving objects
+        this.world.createCollider(
+            RAPIER.ColliderDesc.cuboid(size/2, size/2, size/2).setMass(1.0).setRestitution(0.5),
+            body
+        );
         body.enableCcd(true);
-        
-        // Track for environment effects
-        this.trackBody(body);
-        
-        return body;
+        this.trackBody(body.handle);
+        return body.handle;
     }
 
-    trackBody(body) {
-        if (body && !this.dynamicBodies.includes(body)) {
-            this.dynamicBodies.push(body);
+    // Accepts a handle (integer) — never store the live body object
+    trackBody(handle) {
+        if (handle !== undefined && handle !== null && !this.dynamicBodies.includes(handle)) {
+            this.dynamicBodies.push(handle);
         }
     }
 
     setEnvironmentType(type) {
         this.envType = type;
-        
-        let targetGravity = -9.81;
-        let damping = 0.0;
 
-        if (type === 'Water') {
-            targetGravity = -9.81;
-            damping = 5.0; // High drag in water
-        } else {
-            // Earth
-            targetGravity = -9.81;
-            damping = 0.0;
-        }
+        let damping = type === 'Water' ? 5.0 : 0.0;
+        this.gravity.y = -9.81;
+        if (this.world) this.world.gravity = this.gravity;
 
-        this.gravity.y = targetGravity;
-        if (this.world) {
-            this.world.gravity = this.gravity;
-        }
-
-        // Apply damping dynamically to all tracked bodies
-        for(let body of this.dynamicBodies) {
+        // Apply damping via handles — get fresh reference each iteration
+        for (const handle of this.dynamicBodies) {
+            const body = this.world.getRigidBody(handle);
             if (body && body.isDynamic()) {
                 body.setLinearDamping(damping);
                 body.setAngularDamping(damping);
@@ -121,7 +93,8 @@ export class PhysicsWorld {
 }
 
 /**
- * Helper to build a motorized revolute joint with limits
+ * Helper to build a motorized revolute joint with limits.
+ * Returns the joint HANDLE (stable integer) — never the live object.
  */
 export function createMotorizedJoint(world, bodyA, bodyB, anchorA, anchorB, axis, limits = null) {
     let params = RAPIER.JointData.revolute(anchorA, anchorB, axis);
@@ -129,14 +102,11 @@ export function createMotorizedJoint(world, bodyA, bodyB, anchorA, anchorB, axis
         params.limitsEnabled = true;
         params.limits = limits;
     }
-    
+
     const joint = world.createImpulseJoint(params, bodyA, bodyB, true);
-    const handle = joint.handle; // Save the stable handle (a plain number)
-
-    // Safe to configure motor at creation time — joint was just created
+    const handle = joint.handle;
     joint.configureMotorPosition(0.0, 100.0, 10.0);
-
-    return handle; // ← return handle, NOT the live object (live refs go stale after world.step)
+    return handle;
 }
 
 export const physics = new PhysicsWorld();

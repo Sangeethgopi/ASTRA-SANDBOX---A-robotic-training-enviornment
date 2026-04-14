@@ -20,8 +20,9 @@ export class Humanoid {
         this.time = 0;
         this.gaitParams = { speed: 0, stepHeight: 0.35, stepLength: 0.45 };
         this.moveDir = { x: 0, z: 0 };
-        this.joints = {}; // Kept for joint motor references
-        this.physicsBodies = {}; // Multi-body tracking
+        this.joints = {}; // Stores joint handles (integers)
+        this.physicsBodies = {}; // Stores body handles (integers) keyed by part name
+        this.physicsBodyHandle = null; // Handle for the primary pelvis body
         this.parts = {}; // Visual mesh references for each body segment
         this.spatialMap = []; // Stores {x, z} of learned obstacles
         this.isJumping = false;
@@ -47,8 +48,9 @@ export class Humanoid {
         
         this._buildPhysicsBodies(x, z, spec);
         this._buildPhysicsJoints();
-        
-        physics.trackBody(this.physicsBody);
+
+        // Track the primary body for environment effects (passes handle, not live ref)
+        physics.trackBody(this.physicsBodyHandle);
 
         // ═══════════════════════════════════════════════
         // VISUAL LAYER: Three.js group hierarchy
@@ -85,8 +87,17 @@ export class Humanoid {
         this.hitbox = hitbox;
 
         // Sync position immediately so body is visible from frame 0
-        const t = this.physicsBody.translation();
-        this.group.position.set(t.x, t.y - (0.8 * this.s), t.z);
+        const initBody = physics.world.getRigidBody(this.physicsBodyHandle);
+        if (initBody) {
+            const t = initBody.translation();
+            this.group.position.set(t.x, t.y - (0.8 * this.s), t.z);
+        }
+    }
+
+    // Helper: get a fresh RigidBody reference by part name (uses handle, not stored object)
+    _getBody(key) {
+        const h = this.physicsBodies[key];
+        return (h !== undefined && h !== null && physics.world) ? physics.world.getRigidBody(h) : null;
     }
 
     _buildPhysicsBodies(x, z, spec) {
@@ -94,127 +105,115 @@ export class Humanoid {
         const world = physics.world;
 
         // --- 1. PELVIS (Root) ---
-        const pelvisDesc = RAPIER.RigidBodyDesc.dynamic()
-            .setTranslation(x, 1.0 * s, z)
-            .setLinearDamping(0.5)
-            .setAngularDamping(2.0); // Slightly resisted to help stability
-        this.physicsBody = world.createRigidBody(pelvisDesc); // Principal body
-        this.physicsBodies.pelvis = this.physicsBody;
-        
+        const pelvisBody = world.createRigidBody(
+            RAPIER.RigidBodyDesc.dynamic()
+                .setTranslation(x, 1.0 * s, z)
+                .setLinearDamping(0.5)
+                .setAngularDamping(2.0)
+        );
+        this.physicsBodyHandle = pelvisBody.handle; // Store handle, not the live object
+        this.physicsBodies.pelvis = pelvisBody.handle;
         world.createCollider(
             RAPIER.ColliderDesc.cuboid(0.15*s, 0.1*s, 0.1*s).setMass(20 * spec.massMult),
-            this.physicsBodies.pelvis
+            pelvisBody
         );
 
         // --- 2. TORSO ---
-        const torsoDesc = RAPIER.RigidBodyDesc.dynamic()
-            .setTranslation(x, 1.3 * s, z);
-        this.physicsBodies.torso = world.createRigidBody(torsoDesc);
+        const torsoBody = world.createRigidBody(
+            RAPIER.RigidBodyDesc.dynamic().setTranslation(x, 1.3 * s, z)
+        );
+        this.physicsBodies.torso = torsoBody.handle;
         world.createCollider(
             RAPIER.ColliderDesc.cuboid(0.18*s, 0.2*s, 0.12*s).setMass(30 * spec.massMult),
-            this.physicsBodies.torso
+            torsoBody
         );
 
         // --- 3. LEGS ---
         for (const side of ['Left', 'Right']) {
             const sx = side === 'Left' ? 0.12 * s : -0.12 * s;
-            
-            // Thigh
-            const thighDesc = RAPIER.RigidBodyDesc.dynamic()
-                .setTranslation(x + sx, 0.7 * s, z);
-            const thigh = world.createRigidBody(thighDesc);
+
+            const thigh = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x + sx, 0.7 * s, z));
             world.createCollider(RAPIER.ColliderDesc.capsule(0.18 * s, 0.06 * s).setMass(8), thigh);
-            this.physicsBodies[`thigh${side}`] = thigh;
+            this.physicsBodies[`thigh${side}`] = thigh.handle;
 
-            // Calf
-            const calfDesc = RAPIER.RigidBodyDesc.dynamic()
-                .setTranslation(x + sx, 0.3 * s, z);
-            const calf = world.createRigidBody(calfDesc);
+            const calf = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x + sx, 0.3 * s, z));
             world.createCollider(RAPIER.ColliderDesc.capsule(0.18 * s, 0.05 * s).setMass(5), calf);
-            this.physicsBodies[`calf${side}`] = calf;
+            this.physicsBodies[`calf${side}`] = calf.handle;
 
-            // Foot
-            const footDesc = RAPIER.RigidBodyDesc.dynamic()
-                .setTranslation(x + sx, 0.05 * s, z + 0.05 * s);
-            const foot = world.createRigidBody(footDesc);
+            const foot = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x + sx, 0.05 * s, z + 0.05 * s));
             world.createCollider(RAPIER.ColliderDesc.cuboid(0.06*s, 0.03*s, 0.12*s).setMass(2).setFriction(2.0).setRestitution(0.1), foot);
-            this.physicsBodies[`foot${side}`] = foot;
-            foot.enableCcd(true); // Feet need CCD to prevent clipping
+            foot.enableCcd(true);
+            this.physicsBodies[`foot${side}`] = foot.handle;
         }
-        
+
         // --- 4. ARMS ---
         for (const side of ['Left', 'Right']) {
             const sx = side === 'Left' ? 0.25 * s : -0.25 * s;
-            
-            // Upper Arm
-            const uArmDesc = RAPIER.RigidBodyDesc.dynamic()
-                .setTranslation(x + sx, 1.3 * s, z);
-            const uArm = world.createRigidBody(uArmDesc);
-            world.createCollider(RAPIER.ColliderDesc.capsule(0.1 * s, 0.04 * s).setMass(3), uArm);
-            this.physicsBodies[`upperArm${side}`] = uArm;
 
-            // Forearm
-            const fArmDesc = RAPIER.RigidBodyDesc.dynamic()
-                .setTranslation(x + sx, 1.1 * s, z);
-            const fArm = world.createRigidBody(fArmDesc);
+            const uArm = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x + sx, 1.3 * s, z));
+            world.createCollider(RAPIER.ColliderDesc.capsule(0.1 * s, 0.04 * s).setMass(3), uArm);
+            this.physicsBodies[`upperArm${side}`] = uArm.handle;
+
+            const fArm = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x + sx, 1.1 * s, z));
             world.createCollider(RAPIER.ColliderDesc.capsule(0.1 * s, 0.03 * s).setMass(2), fArm);
-            this.physicsBodies[`foreArm${side}`] = fArm;
+            this.physicsBodies[`foreArm${side}`] = fArm.handle;
         }
 
         // --- 5. HEAD ---
         if (!spec.noHead) {
-            const headDesc = RAPIER.RigidBodyDesc.dynamic()
-                .setTranslation(x, 1.6 * s, z);
-            const head = world.createRigidBody(headDesc);
+            const head = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, 1.6 * s, z));
             world.createCollider(RAPIER.ColliderDesc.cuboid(0.1*s, 0.1*s, 0.1*s).setMass(4), head);
-            this.physicsBodies.head = head;
+            this.physicsBodies.head = head.handle;
         }
     }
 
     _buildPhysicsJoints() {
         const s = this.s;
         const world = physics.world;
-        const b = this.physicsBodies;
 
-        // 1. Pelvis <-> Torso (Waist Joint)
-        this.joints.waist = createMotorizedJoint(world, b.pelvis, b.torso, 
-            {x:0, y:0.1*s, z:0}, {x:0, y:-0.2*s, z:0}, {x:0, y:1, z:0});
+        // Get fresh body references for joint creation — safe since this is init-time not render-time
+        const pelvis   = this._getBody('pelvis');
+        const torso    = this._getBody('torso');
+        const head     = this._getBody('head');
 
-        // 2. Legs
+        if (pelvis && torso) {
+            this.joints.waist = createMotorizedJoint(world, pelvis, torso,
+                {x:0, y:0.1*s, z:0}, {x:0, y:-0.2*s, z:0}, {x:0, y:1, z:0});
+        }
+
         for (const side of ['Left', 'Right']) {
             const sx = side === 'Left' ? 0.12 * s : -0.12 * s;
-            
-            // Pelvis <-> Thigh (Hip)
-            this.joints[`hip${side}`] = createMotorizedJoint(world, b.pelvis, b[`thigh${side}`], 
-                {x:sx, y:-0.05*s, z:0}, {x:0, y:0.2*s, z:0}, {x:1, y:0, z:0}); // Pitch axis
+            const thigh = this._getBody(`thigh${side}`);
+            const calf  = this._getBody(`calf${side}`);
+            const foot  = this._getBody(`foot${side}`);
 
-            // Thigh <-> Calf (Knee)
-            this.joints[`knee${side}`] = createMotorizedJoint(world, b[`thigh${side}`], b[`calf${side}`], 
-                {x:0, y:-0.2*s, z:0}, {x:0, y:0.2*s, z:0}, {x:1, y:0, z:0});
-
-            // Calf <-> Foot (Ankle)
-            this.joints[`ankle${side}`] = createMotorizedJoint(world, b[`calf${side}`], b[`foot${side}`], 
-                {x:0, y:-0.2*s, z:0}, {x:0, y:0.03*s, z:-0.05*s}, {x:1, y:0, z:0});
+            if (pelvis && thigh)
+                this.joints[`hip${side}`] = createMotorizedJoint(world, pelvis, thigh,
+                    {x:sx, y:-0.05*s, z:0}, {x:0, y:0.2*s, z:0}, {x:1, y:0, z:0});
+            if (thigh && calf)
+                this.joints[`knee${side}`] = createMotorizedJoint(world, thigh, calf,
+                    {x:0, y:-0.2*s, z:0}, {x:0, y:0.2*s, z:0}, {x:1, y:0, z:0});
+            if (calf && foot)
+                this.joints[`ankle${side}`] = createMotorizedJoint(world, calf, foot,
+                    {x:0, y:-0.2*s, z:0}, {x:0, y:0.03*s, z:-0.05*s}, {x:1, y:0, z:0});
         }
 
-        // 3. Arms
         for (const side of ['Left', 'Right']) {
             const sx = side === 'Left' ? 0.25 * s : -0.25 * s;
-            
-            // Torso <-> Upper Arm (Shoulder)
-            this.joints[`shoulder${side}`] = createMotorizedJoint(world, b.torso, b[`upperArm${side}`], 
-                {x:sx, y:0.1*s, z:0}, {x:0, y:0.1*s, z:0}, {x:1, y:0, z:0});
+            const uArm  = this._getBody(`upperArm${side}`);
+            const fArm  = this._getBody(`foreArm${side}`);
 
-            // Upper Arm <-> Forearm (Elbow)
-            this.joints[`elbow${side}`] = createMotorizedJoint(world, b[`upperArm${side}`], b[`foreArm${side}`], 
-                {x:0, y:-0.1*s, z:0}, {x:0, y:0.1*s, z:0}, {x:1, y:0, z:0});
+            if (torso && uArm)
+                this.joints[`shoulder${side}`] = createMotorizedJoint(world, torso, uArm,
+                    {x:sx, y:0.1*s, z:0}, {x:0, y:0.1*s, z:0}, {x:1, y:0, z:0});
+            if (uArm && fArm)
+                this.joints[`elbow${side}`] = createMotorizedJoint(world, uArm, fArm,
+                    {x:0, y:-0.1*s, z:0}, {x:0, y:0.1*s, z:0}, {x:1, y:0, z:0});
         }
 
-        // 4. Torso <-> Head (Neck)
-        if (b.head) {
-            this.joints.neck = createMotorizedJoint(world, b.torso, b.head, 
+        if (torso && head)
+            this.joints.neck = createMotorizedJoint(world, torso, head,
                 {x:0, y:0.25*s, z:0}, {x:0, y:-0.1*s, z:0}, {x:1, y:0, z:0});
-        }
     }
 
     // ─── Material helpers ───────────────────────────────
@@ -446,11 +445,12 @@ export class Humanoid {
     setMoveDirection(dx, dz) { this.moveDir.x = dx; this.moveDir.z = dz; }
 
     jump() {
-        if (!this.physicsBody || this.isJumping) return;
-        const mass = this.physicsBody.mass();
-        this.physicsBody.applyImpulse({ x: 0, y: mass * 7.5, z: 0 }, true);
+        if (!this.physicsBodyHandle || this.isJumping) return;
+        const body = physics.world.getRigidBody(this.physicsBodyHandle);
+        if (!body) return;
+        body.applyImpulse({ x: 0, y: body.mass() * 7.5, z: 0 }, true);
         this.isJumping = true;
-        this.jumpCooldown = 1.0; // Seconds until next jump allowed
+        this.jumpCooldown = 1.0;
     }
 
     addExperience(x, z) {
@@ -531,39 +531,39 @@ export class Humanoid {
         const stepL  = adaptiveStepL;
 
         // ─ Capsule physics & locomotion ─────────────────────────────
-        if (this.physicsBody) {
-            const tp = this.physicsBody.translation();
-            const vel = this.physicsBody.linvel();
+        if (this.physicsBodyHandle !== null && physics.world) {
+            // Get ONE fresh reference — extract plain JS data immediately, don't hold across world calls
+            const _pb = physics.world.getRigidBody(this.physicsBodyHandle);
+            if (!_pb) return;
+            const tp  = _pb.translation(); // plain {x,y,z} copy
+            const vel = _pb.linvel();      // plain {x,y,z} copy
             const moving = this.moveDir.x !== 0 || this.moveDir.z !== 0 || this.moveDir.y !== 0;
 
-            // Abyss Recovery: Teleport back if fallen into the void
+            // Abyss Recovery
             if (tp.y < -2.0) {
-                this.physicsBody.setTranslation({ x: 0, y: 3, z: -2 }, true);
-                this.physicsBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+                _pb.setTranslation({ x: 0, y: 3, z: -2 }, true);
+                _pb.setLinvel({ x: 0, y: 0, z: 0 }, true);
                 this.broadcastExperience("Critical Recovery: Ground breach prevented.");
-                return; 
+                return;
             }
 
-            // Sync visual group — offset = where capsule rests above ground
+            // Sync visual group
             this.group.position.set(tp.x, tp.y - this.footOffset, tp.z);
 
-            // --- GAIT-SYNCED LOCOMOTION (TAKINE EACH STEP) ---
             const gaitSync = speed > 0 ? 0.8 + Math.abs(Math.sin(this.time)) * 0.4 : 1.0;
-            const targetSpd = speed > 0 ? speed * 1.1 * gaitSync : 3.0; 
+            const targetSpd = speed > 0 ? speed * 1.1 * gaitSync : 3.0;
 
             if (moving) {
-                // ... rest of moving logic ...
-                const allowY = physics.world && Math.abs(physics.world.gravity.y) < 1.0;
-                
-                this.physicsBody.setLinvel({
+                const allowY = Math.abs(physics.world.gravity.y) < 1.0;
+                _pb.setLinvel({
                     x: this.moveDir.x * targetSpd,
                     y: (allowY && this.moveDir.y !== 0) ? this.moveDir.y * targetSpd : vel.y,
                     z: this.moveDir.z * targetSpd
                 }, true);
 
                 // --- OBSTACLE DETECTION & LEARNING ---
+                // castRay is called AFTER all _pb method calls to avoid borrow overlap
                 if (speed > 0 && !this.isJumping && this.jumpCooldown <= 0) {
-                    // 1. Proactive Raycast Detection (Immediate response)
                     const ray = new RAPIER.Ray(
                         { x: tp.x, y: tp.y + 0.5 * this.s, z: tp.z },
                         { x: this.moveDir.x, y: 0, z: this.moveDir.z }
@@ -574,57 +574,46 @@ export class Humanoid {
                         this.jump();
                     }
 
-                    // 2. Spatial Memory detection (Proactive learning)
                     const memory = this.spatialMap.find(exp => {
                         const dx = exp.x - tp.x;
                         const dz = exp.z - tp.z;
-                        const dist = Math.hypot(dx, dz);
-                        const dot = dx * this.moveDir.x + dz * this.moveDir.z;
-                        return dist < 2.0 && dot > 0.5; // Nearby and ahead
+                        return Math.hypot(dx, dz) < 2.0 && (dx * this.moveDir.x + dz * this.moveDir.z) > 0.5;
                     });
                     if (memory) {
                         this.broadcastExperience(`Anticipatory jump triggered by spatial memory!`);
                         this.jump();
                     }
 
-                    // 3. Blocked Progress Detection (Failure learning)
-                    const horizVel = Math.hypot(vel.x, vel.z);
-                    if (horizVel < speed * 0.2) { // Moving too slowly despite intent
+                    if (Math.hypot(vel.x, vel.z) < speed * 0.2) {
                         this.broadcastExperience(`Progress blocked. Real-time learning triggered.`);
                         this.addExperience(tp.x + this.moveDir.x * 0.5, tp.z + this.moveDir.z * 0.5);
                         this.jump();
                     }
                 }
             } else {
-                // Decelerate (apply drag to X/Z, and to Y if in Space mode)
                 const drag = speed > 0 ? 0.8 : 0.6;
-                const allowY = physics.world && Math.abs(physics.world.gravity.y) < 1.0;
-                this.physicsBody.setLinvel({ 
-                    x: vel.x * drag, 
-                    y: allowY ? vel.y * 0.9 : vel.y, 
-                    z: vel.z * drag 
+                const allowY = Math.abs(physics.world.gravity.y) < 1.0;
+                _pb.setLinvel({
+                    x: vel.x * drag,
+                    y: allowY ? vel.y * 0.9 : vel.y,
+                    z: vel.z * drag
                 }, true);
             }
 
-        // (Removed previous misplaced recovery check)
-
-            // Face direction of horizontal movement
+            // Face direction of movement
             if (speed > 0 && (this.moveDir.x !== 0 || this.moveDir.z !== 0)) {
                 const targetAngle = Math.atan2(this.moveDir.x, this.moveDir.z);
                 this.group.rotation.y = THREE.MathUtils.lerp(
                     this.group.rotation.y, targetAngle, Math.min(1, delta * 8));
             }
-            
-            // Jump state management
+
             if (this.jumpCooldown > 0) this.jumpCooldown -= delta;
-            
-            // Apply Horizontal Force for movement (Drive the hip)
+
+            // Apply horizontal force (pelvis drive) — get a fresh reference for write
             if (moving) {
                 const force = 10.0 * this.modelSpec.massMult;
-                this.physicsBodies.pelvis.applyImpulse({
-                    x: this.moveDir.x * force,
-                    y: 0,
-                    z: this.moveDir.z * force
+                this._getBody('pelvis')?.applyImpulse({
+                    x: this.moveDir.x * force, y: 0, z: this.moveDir.z * force
                 }, true);
             }
         }
@@ -771,41 +760,34 @@ export class Humanoid {
     }
 
     _syncVisualsToPhysics() {
-        const b = this.physicsBodies;
-        if (b.pelvis) {
-            const t = b.pelvis.translation();
+        const pelvis = this._getBody('pelvis');
+        if (pelvis) {
+            const t = pelvis.translation();
             this.group.position.set(t.x, t.y - (0.1 * this.s), t.z);
         }
     }
 
     _applyActiveBalance() {
-        if (!this.physicsBodies.pelvis) return;
-        const pelvis = this.physicsBodies.pelvis;
+        // Get a fresh reference — never store it between frames
+        const pelvis = this._getBody('pelvis');
+        if (!pelvis) return;
+
         const rot = pelvis.rotation();
-        
         const upright = new THREE.Vector3(0, 1, 0);
         const currentUp = new THREE.Vector3(0, 1, 0).applyQuaternion(new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w));
-        
         const error = new THREE.Vector3().crossVectors(currentUp, upright);
         const angVel = pelvis.angvel();
-        
-        const torqueP = 400.0;
-        const torqueD = 40.0;
-        
+
         pelvis.applyTorqueImpulse({
-            x: error.x * torqueP - angVel.x * torqueD,
-            y: error.y * torqueP - angVel.y * torqueD,
-            z: error.z * torqueP - angVel.z * torqueD
+            x: error.x * 400.0 - angVel.x * 40.0,
+            y: error.y * 400.0 - angVel.y * 40.0,
+            z: error.z * 400.0 - angVel.z * 40.0
         }, true);
 
-        const targetH = 0.9 * this.s;
-        const currentH = pelvis.translation().y;
-        const hError = targetH - currentH;
+        const tp = pelvis.translation();
         const vel = pelvis.linvel();
-        
-        const forceP = 1500.0;
-        const forceD = 150.0;
-        const upwardForce = Math.max(0, hError * forceP - vel.y * forceD);
+        const hError = (0.9 * this.s) - tp.y;
+        const upwardForce = Math.max(0, hError * 1500.0 - vel.y * 150.0);
         pelvis.applyImpulse({ x: 0, y: upwardForce * 0.016, z: 0 }, true);
     }
 
@@ -813,18 +795,18 @@ export class Humanoid {
         const world = physics.world;
         if (!world) return;
         const j = this.joints;
-        // Always retrieve a fresh reference via handle — live Rapier objects go stale after world.step()
-        const get = (h) => (h !== undefined && h !== null) ? world.getImpulseJoint(h) : null;
-
-        const jHL = get(j.hipLeft);      if (jHL) jHL.configureMotorPosition(hL,  120.0, 12.0);
-        const jHR = get(j.hipRight);     if (jHR) jHR.configureMotorPosition(hR,  120.0, 12.0);
-        const jKL = get(j.kneeLeft);     if (jKL) jKL.configureMotorPosition(-kL, 100.0, 10.0);
-        const jKR = get(j.kneeRight);    if (jKR) jKR.configureMotorPosition(-kR, 100.0, 10.0);
-        const jAL = get(j.ankleLeft);    if (jAL) jAL.configureMotorPosition(aL,   80.0,  8.0);
-        const jAR = get(j.ankleRight);   if (jAR) jAR.configureMotorPosition(aR,   80.0,  8.0);
-        const jSL = get(j.shoulderLeft); if (jSL) jSL.configureMotorPosition(arL,  60.0,  6.0);
-        const jSR = get(j.shoulderRight);if (jSR) jSR.configureMotorPosition(arR,  60.0,  6.0);
-        const jEL = get(j.elbowLeft);    if (jEL) jEL.configureMotorPosition(ebL,  40.0,  4.0);
-        const jER = get(j.elbowRight);   if (jER) jER.configureMotorPosition(ebR,  40.0,  4.0);
+        // Use optional chaining on a one-liner — avoids storing any joint reference as a variable
+        // Each expression completes (and the WASM handle is NOT stored) before the next line runs
+        const motors = [
+            [j.hipLeft,      hL,   120, 12], [j.hipRight,      hR,   120, 12],
+            [j.kneeLeft,    -kL,   100, 10], [j.kneeRight,    -kR,   100, 10],
+            [j.ankleLeft,    aL,    80,  8], [j.ankleRight,    aR,    80,  8],
+            [j.shoulderLeft, arL,   60,  6], [j.shoulderRight, arR,   60,  6],
+            [j.elbowLeft,    ebL,   40,  4], [j.elbowRight,    ebR,   40,  4],
+        ];
+        for (const [handle, pos, stiff, damp] of motors) {
+            if (handle == null) continue;
+            world.getImpulseJoint(handle)?.configureMotorPosition(pos, stiff, damp);
+        }
     }
 }
