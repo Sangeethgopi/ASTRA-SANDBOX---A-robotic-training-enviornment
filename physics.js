@@ -1,4 +1,4 @@
-import RAPIER from '@dimforge/rapier3d';
+let RAPIER = null;
 
 export class PhysicsWorld {
     constructor() {
@@ -15,13 +15,28 @@ export class PhysicsWorld {
     }
 
     async init() {
-        await RAPIER.init();
-        this.world = new RAPIER.World(this.gravity);
-        this.world.timestep = 1.0 / 60.0;
-        this.eventQueue = new RAPIER.EventQueue(true);
-        this.ready = true;
-        console.log("🚀 Physics Engine Ready (Shield Enabled)");
-        return this.world;
+        try {
+            // Dynamically import Rapier and initialize WASM
+            RAPIER = await import('https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.11.2/rapier.es.js');
+            await RAPIER.init();
+            this.world = new RAPIER.World(this.gravity);
+            this.world.timestep = 1.0 / 60.0;
+            this.eventQueue = new RAPIER.EventQueue(true);
+            this.ready = true;
+            console.log("🚀 Physics Engine Ready (Shield Enabled)");
+            return this.world;
+        } catch (err) {
+            console.error("❌ Physics Engine FAILED to initialize:", err);
+            // Show error in the UI overlay
+            const el = document.getElementById('error-log');
+            if (el) {
+                el.style.display = 'block';
+                el.innerHTML += `Physics init failed: ${err.message}<br>`;
+            }
+            const status = document.getElementById('physics-status');
+            if (status) status.innerText = 'Physics: FAILED ❌';
+            throw err;
+        }
     }
 
     // Shield Wrapper: Prevents re-entrant calls
