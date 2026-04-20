@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from mangum import Mangum
 import os
 import json
 import urllib.request
@@ -120,3 +121,7 @@ def extract_json(text: str):
         except Exception:
             return None
     return None
+
+
+# ── Vercel / AWS Lambda ASGI handler ─────────────────────────────────────────
+handler = Mangum(app, lifespan="off")
