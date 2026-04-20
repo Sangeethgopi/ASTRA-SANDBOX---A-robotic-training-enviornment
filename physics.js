@@ -1,4 +1,4 @@
-let RAPIER = null;
+import RAPIER from '@dimforge/rapier3d';
 
 export class PhysicsWorld {
     constructor() {
@@ -16,8 +16,6 @@ export class PhysicsWorld {
 
     async init() {
         try {
-            // Dynamically import Rapier and initialize WASM
-            RAPIER = await import('@dimforge/rapier3d');
             await RAPIER.init();
             this.world = new RAPIER.World(this.gravity);
             this.world.timestep = 1.0 / 60.0;
